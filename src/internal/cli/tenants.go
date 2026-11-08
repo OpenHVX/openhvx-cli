@@ -25,7 +25,7 @@ func (a *App) getTenants(args []string) error {
 		return ErrUsage
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	if a.outputFormat == "json" {
 		raw, err := client.ListTenantsRaw()
 		if err != nil {
@@ -75,7 +75,7 @@ func (a *App) createTenant(args []string) error {
 
 	fs := flag.NewFlagSet("create tenant", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	idFlag := fs.String("id", "", "tenant ID (optional)")
+	idFlag := fs.String("id", "", "tenant ID (required)")
 	nameFlag := fs.String("name", "", "tenant name")
 	descriptionFlag := fs.String("description", "", "tenant description")
 	statusFlag := fs.String("status", "", "tenant status")
@@ -126,7 +126,7 @@ func (a *App) createTenant(args []string) error {
 		Quotas:      quotas,
 		Metadata:    metadata,
 	}
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	tenant, err := client.CreateTenant(req)
 	if err != nil {
 		return err
@@ -174,7 +174,7 @@ func (a *App) deleteTenant(args []string) error {
 		return fmt.Errorf("--id or TENANT_ID argument is required")
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	if err := client.DeleteTenant(tenantID); err != nil {
 		return err
 	}
@@ -222,7 +222,7 @@ func (a *App) createQuotaRecalculation(args []string) error {
 		return err
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	if err := client.RecalculateQuota(tenantID); err != nil {
 		return err
 	}

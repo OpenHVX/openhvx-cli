@@ -26,6 +26,7 @@ func (a *App) initCommand(args []string) error {
 	tenantServer := fs.String("tenant-server", "", "tenant API base URL")
 	adminServer := fs.String("admin-server", "", "admin API base URL")
 	username := fs.String("username", "", "login username or email")
+	passwordStdin := fs.Bool("password-stdin", false, "read login password from stdin")
 	password := fs.String("password", "", "login password (or set HVX_PASSWORD)")
 	insecure := fs.Bool("insecure", false, "skip TLS verification (dev only)")
 	tenantID := fs.String("tenant-id", "", "default tenant ID (admin mode)")
@@ -38,6 +39,12 @@ func (a *App) initCommand(args []string) error {
 		return ErrUsage
 	}
 
+	if fs.NArg() != 0 {
+		return ErrUsage
+	}
+	if *patExpires < 0 {
+		return fmt.Errorf("--pat-expiry-days must be nonnegative")
+	}
 	mode := strings.ToLower(strings.TrimSpace(*modeFlag))
 	if mode != "tenant" && mode != "admin" {
 		return fmt.Errorf("--mode must be 'tenant' or 'admin'")
@@ -48,8 +55,21 @@ func (a *App) initCommand(args []string) error {
 		return fmt.Errorf("--username is required")
 	}
 
+	if *passwordStdin && *password != "" {
+		return fmt.Errorf("--password and --password-stdin are mutually exclusive")
+	}
 	pass := *password
-	if pass == "" {
+	if *passwordStdin {
+		raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4097))
+		if err != nil {
+			return err
+		}
+		if len(raw) > 4096 {
+			return fmt.Errorf("password input exceeds 4096 bytes")
+		}
+		pass = strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	}
+	if pass == "" && !*passwordStdin {
 		pass = os.Getenv("HVX_PASSWORD")
 	}
 	if pass == "" {
@@ -129,7 +149,6 @@ func (a *App) initCommand(args []string) error {
 	}
 
 	cfg.SetMode(mode)
-	cfg.Auth.PAT = patResp.Token
 	cfg.Auth.Insecure = *insecure
 
 	if mode == "tenant" {
@@ -154,6 +173,7 @@ func (a *App) initCommand(args []string) error {
 		cfg.SetCurrentTenant(tenantContext)
 	}
 
+	cfg.SetToken(mode, patResp.Token)
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("unable to save config: %w", err)
 	}

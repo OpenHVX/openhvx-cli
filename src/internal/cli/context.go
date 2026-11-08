@@ -110,7 +110,7 @@ func (a *App) contextSetTenant(args []string) error {
 		return fmt.Errorf("TENANT_ID cannot be empty")
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	exists, err := tenantExists(client, tenantID)
 	if err != nil {
 		return fmt.Errorf("unable to verify tenant: %w", err)

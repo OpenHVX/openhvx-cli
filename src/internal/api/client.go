@@ -2,12 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -254,14 +256,16 @@ type PATCreateResponse struct {
 
 // Client is a minimal HTTP client that handles authentication and TLS settings.
 type Client struct {
-	BaseURL string
-	PAT     string
-	HTTP    *http.Client
+	BaseURL        string
+	PAT            string
+	HTTP           *http.Client
+	IdempotencyKey string
+	Context        context.Context
 }
 
 // NewClient instantiates a Client with optional insecure TLS configuration.
 func NewClient(baseURL, pat string, insecure bool) *Client {
-	transport := &http.Transport{}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if insecure {
 		transport.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true, // dev only
@@ -269,17 +273,54 @@ func NewClient(baseURL, pat string, insecure bool) *Client {
 	}
 
 	return &Client{
-		BaseURL: baseURL,
+		BaseURL: strings.TrimRight(baseURL, "/"),
 		PAT:     pat,
 		HTTP: &http.Client{
 			Timeout:   10 * time.Second,
 			Transport: transport,
+			// Do not forward credential-bearing operations through redirects.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
 
+func (c *Client) requestContext() context.Context {
+	if c.Context != nil {
+		return c.Context
+	}
+	return context.Background()
+}
+
+// requestURL keeps all requests on an explicitly configured HTTP(S) origin.
+func (c *Client) requestURL(path string) (string, error) {
+	base, err := url.Parse(c.BaseURL)
+	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+		return "", fmt.Errorf("server must be an HTTP(S) URL without embedded credentials, query or fragment")
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "\r\n") {
+		return "", fmt.Errorf("invalid API path")
+	}
+	return strings.TrimRight(c.BaseURL, "/") + path, nil
+}
+
+func readResponse(body io.Reader) ([]byte, error) {
+	const limit = 16 << 20
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("API response exceeds 16 MiB")
+	}
+	return data, nil
+}
+
 func (c *Client) doRequest(method, path string) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.BaseURL+path, nil)
+	requestURL, err := c.requestURL(path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(c.requestContext(), method, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -299,12 +340,12 @@ func (c *Client) fetch(path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := readResponse(resp.Body)
 		return nil, fmt.Errorf("API error: %s: %s", resp.Status, string(b))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +359,11 @@ func (c *Client) postJSON(path string, payload any) ([]byte, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+path, &buf)
+	requestURL, err := c.requestURL(path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(c.requestContext(), http.MethodPost, requestURL, &buf)
 	if err != nil {
 		return nil, err
 	}
@@ -328,6 +373,13 @@ func (c *Client) postJSON(path string, payload any) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	if strings.HasSuffix(path, "/tasks") {
+		key := strings.TrimSpace(c.IdempotencyKey)
+		if len(key) < 1 || len(key) > 200 || strings.ContainsAny(key, "\r\n") {
+			return nil, fmt.Errorf("--idempotency-key required for task submission (1..200 characters)")
+		}
+		req.Header.Set("Idempotency-Key", key)
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -335,12 +387,12 @@ func (c *Client) postJSON(path string, payload any) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := readResponse(resp.Body)
 		return nil, fmt.Errorf("API error: %s: %s", resp.Status, string(b))
 	}
 
-	return io.ReadAll(resp.Body)
+	return readResponse(resp.Body)
 }
 
 // Login exchanges credentials for a PAT/token at the given API path.
@@ -625,8 +677,8 @@ func (c *Client) RecalculateQuota(tenantID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := readResponse(resp.Body)
 		return fmt.Errorf("API error: %s: %s", resp.Status, string(b))
 	}
 
@@ -675,8 +727,8 @@ func (c *Client) DeleteTenant(tenantID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := readResponse(resp.Body)
 		return fmt.Errorf("API error: %s: %s", resp.Status, string(b))
 	}
 
@@ -729,7 +781,7 @@ func (c *Client) CreateStorageTask(tenantID string, data StorageCreateData) ([]b
 }
 
 // DeleteStorageTask submits a storage.delete task for the specified tenant.
-func (c *Client) DeleteStorageTask(tenantID, refID string) ([]byte, error) {
+func (c *Client) DeleteStorageTask(tenantID, refID, agentID string) ([]byte, error) {
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenantID is required")
 	}
@@ -747,8 +799,9 @@ func (c *Client) DeleteStorageTask(tenantID, refID string) ([]byte, error) {
 	}{
 		TenantID: tenantID,
 		Target: TaskTarget{
-			Kind:  "storage",
-			RefID: refID,
+			Kind:    "storage",
+			RefID:   refID,
+			AgentID: agentID,
 		},
 		Action: "storage.delete",
 		Data:   data,
@@ -761,7 +814,7 @@ func (c *Client) DeleteStorageTask(tenantID, refID string) ([]byte, error) {
 
 // CreateVMTask submits a vm.create task for the specified tenant.
 func (c *Client) CreateVMTask(tenantID string, data VMCreateData, agentID string) ([]byte, error) {
-	if strings.TrimSpace(data.Name) == "" || strings.TrimSpace(data.RAM) == "" || data.CPU == 0 || strings.TrimSpace(data.DiskID) == "" {
+	if strings.TrimSpace(data.Name) == "" || strings.TrimSpace(data.RAM) == "" || data.CPU <= 0 || strings.TrimSpace(data.DiskID) == "" {
 		return nil, fmt.Errorf("missing required VM data")
 	}
 	payload := struct {
@@ -793,9 +846,11 @@ func (c *Client) DeleteVMTask(tenantID, agentID, refID string, data VMDeleteData
 	if refID == "" {
 		return nil, fmt.Errorf("refID is required")
 	}
-	if data.GUID == "" {
-		return nil, fmt.Errorf("guid is required")
+	if !validGUID(refID) || !strings.EqualFold(refID, data.GUID) {
+		return nil, fmt.Errorf("--ref-id and --guid must identify the same canonical Hyper-V GUID")
 	}
+	refID = strings.ToLower(refID)
+	data.GUID = refID
 	payload := struct {
 		TenantID string       `json:"tenantId"`
 		Target   TaskTarget   `json:"target"`
@@ -998,4 +1053,23 @@ func tenantPath(base, tenantID string) string {
 	// Tenant context is derived from the PAT/JWT; avoid adding tenantId query params.
 	_ = tenantID
 	return base
+}
+
+func validGUID(value string) bool {
+	return regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(value)
+}
+
+// SubmitTask sends the HTTP task payload; AMQP envelopes are built by the backend.
+func (c *Client) SubmitTask(mode string, payload json.RawMessage) ([]byte, error) {
+	if mode != "tenant" && mode != "admin" {
+		return nil, fmt.Errorf("invalid task API mode")
+	}
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &input); err != nil || input == nil {
+		return nil, fmt.Errorf("task must be a JSON object")
+	}
+	if mode == "tenant" && input["tenantId"] != nil {
+		return nil, fmt.Errorf("tenantId must be derived from tenant credentials")
+	}
+	return c.postJSON("/api/v1/"+mode+"/tasks", payload)
 }

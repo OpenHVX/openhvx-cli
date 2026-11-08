@@ -28,12 +28,12 @@ Primary commands:
   hvx get tenants                          # admin mode: list all tenants
   hvx get task --id TASK_ID                # fetch a task payload in the current mode
 
-  hvx describe image IMAGE_ID [--resolve]  # describe a VM image (raw or summarized)
+  hvx describe image [--resolve] IMAGE_ID  # describe a VM image (raw or summarized)
   hvx describe task TASK_ID                # show task payload/status
 
   hvx create disk --name NAME --size-mb MB # create a storage disk
   hvx create vm [options]                  # admin mode: submit a VM creation task
-  hvx create tenant --name NAME [--id ID]  # admin mode: create a tenant
+  hvx create tenant --name NAME --id ID  # admin mode: create a tenant
   hvx delete vm [options]                  # admin mode: submit a VM deletion task
   hvx delete disk --ref-id REF_ID          # admin mode: submit a disk deletion task
   hvx delete tenant TENANT_ID              # admin mode: delete a tenant
@@ -43,10 +43,13 @@ Primary commands:
   hvx context show                         # print current profile/endpoints
   hvx context set-mode tenant|admin        # change the active profile mode
   hvx context set-tenant TENANT_ID         # update the tenant context (admin mode)
+  hvx create task --file task.json          # submit an HTTP task payload in either mode
+  hvx wait task TASK_ID [--timeout 5m]      # poll until done/error; never resubmit
   hvx init [options]                       # initialize config.json and fetch a PAT
 
 Options:
   -o, --output text|json   # change output format (default: text)
+  --idempotency-key KEY    # required for every task submission; reuse on retries
 
 Configuration:
   The CLI loads its config from ~/.config/hvx/config.json (or $HVX_CONFIG)
@@ -63,8 +66,9 @@ Example config.json:
     "admin":  { "server": "https://admin-api.openhvx.local" }
   },
   "auth": {
-    "pat": "hvx_pat_xxx",
-    "insecure": true
+    "tenantPat": "<tenant-pat>",
+    "adminPat": "<admin-pat>",
+    "insecure": false
   }
 }
 
@@ -83,10 +87,11 @@ func Usage() string {
 
 // App regroups dependencies required to run CLI commands.
 type App struct {
-	cfg          *config.Config
-	stdout       io.Writer
-	stderr       io.Writer
-	outputFormat string
+	cfg            *config.Config
+	stdout         io.Writer
+	stderr         io.Writer
+	outputFormat   string
+	idempotencyKey string
 }
 
 type commandMode uint8
@@ -104,6 +109,9 @@ func NewApp(cfg *config.Config, stdout, stderr io.Writer) *App {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	return &App{
 		cfg:          cfg,
 		stdout:       stdout,
@@ -114,6 +122,8 @@ func NewApp(cfg *config.Config, stdout, stderr io.Writer) *App {
 
 // Execute dispatches the CLI command according to the provided arguments.
 func (a *App) Execute(args []string) error {
+	a.idempotencyKey = ""
+	a.outputFormat = "text"
 	if len(args) == 0 {
 		return ErrUsage
 	}
@@ -128,6 +138,11 @@ func (a *App) Execute(args []string) error {
 	}
 
 	switch parsed[0] {
+	case "help", "--help", "-h":
+		_, err := fmt.Fprint(a.stdout, Usage())
+		return err
+	case "wait":
+		return a.waitCommand(parsed[1:])
 	case "get":
 		return a.getCommand(parsed[1:])
 	case "describe":
@@ -147,8 +162,8 @@ func (a *App) Execute(args []string) error {
 
 func (a *App) ensureAccess(command string, allowed commandMode) error {
 	cfg := a.cfg
-	if cfg == nil || cfg.Auth.PAT == "" {
-		return fmt.Errorf("missing auth.pat in config.json")
+	if cfg == nil || cfg.Token() == "" {
+		return fmt.Errorf("missing credential for active mode (run hvx init for this mode)")
 	}
 
 	switch cfg.Mode() {
@@ -190,6 +205,17 @@ func (a *App) parseGlobalOptions(args []string) ([]string, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--idempotency-key":
+			if i+1 >= len(args) || a.idempotencyKey != "" {
+				return nil, ErrUsage
+			}
+			a.idempotencyKey = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--idempotency-key="):
+			if a.idempotencyKey != "" {
+				return nil, ErrUsage
+			}
+			a.idempotencyKey = strings.TrimPrefix(arg, "--idempotency-key=")
 		case arg == "-o" || arg == "--output":
 			if i+1 >= len(args) {
 				return nil, ErrUsage
@@ -283,6 +309,8 @@ func (a *App) createCommand(args []string) error {
 		return ErrUsage
 	}
 	switch args[0] {
+	case "task":
+		return a.createTask(args[1:])
 	case "disk":
 		return a.createDisk(args[1:])
 	case "vm":

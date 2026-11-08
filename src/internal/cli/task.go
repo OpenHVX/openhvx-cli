@@ -13,7 +13,7 @@ import (
 )
 
 func (a *App) describeTask(args []string) error {
-	if err := a.ensureAccess("describe task", modeAdmin); err != nil {
+	if err := a.ensureAccess("describe task", modeTenant|modeAdmin); err != nil {
 		return err
 	}
 
@@ -38,9 +38,7 @@ func (a *App) describeTask(args []string) error {
 		return fmt.Errorf("TASK_ID is required")
 	}
 
-	cfg := a.cfg
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
-	raw, err := client.GetAdminTask(taskID)
+	raw, err := a.fetchTask(taskID)
 	if err != nil {
 		return err
 	}
@@ -98,10 +96,10 @@ func (a *App) getTask(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client := api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		raw, err = client.GetTenantTask(taskID)
 	case "admin":
-		client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		raw, err = client.GetAdminTask(taskID)
 	default:
 		return fmt.Errorf("invalid profile.mode in config.json (use 'tenant' or 'admin')")
@@ -129,9 +127,9 @@ func (a *App) getTask(args []string) error {
 	status := strings.TrimSpace(record.Status)
 	if status == "" {
 		if env.Success {
-			status = "success"
+			status = "unknown"
 		} else {
-			status = "error"
+			status = "unknown"
 		}
 	}
 	status = strings.ToUpper(status)
@@ -198,6 +196,15 @@ func (a *App) getTask(args []string) error {
 		fmt.Fprintf(a.stdout, "Routing Key: %s\n", record.RoutingKey)
 	}
 	fmt.Fprintf(a.stdout, "Quota Hold: %t\n", record.HasQuotaHold)
+	if record.ContractVersion > 0 {
+		fmt.Fprintf(a.stdout, "Protocol: v%d\n", record.ContractVersion)
+	}
+	if record.Outcome != "" {
+		fmt.Fprintf(a.stdout, "Outcome: %s\n", record.Outcome)
+	}
+	if err := a.printTaskJSONBlock("Delivery", record.Delivery); err != nil {
+		return err
+	}
 
 	fmt.Fprintln(a.stdout, "\nTimeline:")
 	fmt.Fprintf(a.stdout, "  Queued:    %s\n", formatAPITime(record.QueuedAt))
@@ -228,31 +235,36 @@ type taskEnvelope struct {
 }
 
 type taskRecord struct {
-	ID            string          `json:"_id"`
-	TaskID        string          `json:"taskId"`
-	TenantID      string          `json:"tenantId"`
-	AgentID       string          `json:"agentId"`
-	Action        string          `json:"action"`
-	Status        string          `json:"status"`
-	CorrelationID string          `json:"correlationId"`
-	QueuedAt      string          `json:"queuedAt"`
-	CreatedAt     string          `json:"createdAt"`
-	UpdatedAt     string          `json:"updatedAt"`
-	PublishedAt   string          `json:"publishedAt"`
-	FinishedAt    string          `json:"finishedAt"`
-	Error         string          `json:"error"`
-	ResultRaw     json.RawMessage `json:"result"`
-	RoutingKey    string          `json:"routingKey"`
-	HasQuotaHold  bool            `json:"hasQuotaHold"`
-	DataRaw       json.RawMessage `json:"data"`
-	Target        *api.TaskTarget `json:"target"`
+	ID              string          `json:"_id"`
+	TaskID          string          `json:"taskId"`
+	TenantID        string          `json:"tenantId"`
+	AgentID         string          `json:"agentId"`
+	Action          string          `json:"action"`
+	Status          string          `json:"status"`
+	Outcome         string          `json:"outcome"`
+	ContractVersion int             `json:"contractVersion"`
+	Delivery        json.RawMessage `json:"delivery"`
+	CorrelationID   string          `json:"correlationId"`
+	QueuedAt        string          `json:"queuedAt"`
+	CreatedAt       string          `json:"createdAt"`
+	UpdatedAt       string          `json:"updatedAt"`
+	PublishedAt     string          `json:"publishedAt"`
+	FinishedAt      string          `json:"finishedAt"`
+	Error           string          `json:"error"`
+	ResultRaw       json.RawMessage `json:"result"`
+	RoutingKey      string          `json:"routingKey"`
+	HasQuotaHold    bool            `json:"hasQuotaHold"`
+	DataRaw         json.RawMessage `json:"data"`
+	Target          *api.TaskTarget `json:"target"`
 }
 
 func decodeTaskResponse(raw []byte) (taskEnvelope, taskRecord, error) {
 	var env taskEnvelope
 	recordRaw := raw
 	if err := json.Unmarshal(raw, &env); err == nil {
-		if len(env.Data) > 0 {
+		var top map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &top)
+		if len(env.Data) > 0 && top["taskId"] == nil && top["_id"] == nil {
 			recordRaw = env.Data
 		} else {
 			env = taskEnvelope{}

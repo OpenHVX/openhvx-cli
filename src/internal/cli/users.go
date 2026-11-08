@@ -37,7 +37,7 @@ func (a *App) createUser(args []string) error {
 	if err != nil {
 		return err
 	}
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	payload := api.TenantUserRequest{
 		Email:    *email,
 		Password: *password,

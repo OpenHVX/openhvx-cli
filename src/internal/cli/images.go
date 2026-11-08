@@ -32,11 +32,11 @@ func (a *App) getImages(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client := api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		list = client.ListTenantImages
 		listRaw = client.ListTenantImagesRaw
 	case "admin":
-		client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		list = client.ListAdminImages
 		listRaw = client.ListAdminImagesRaw
 	default:
@@ -113,12 +113,12 @@ func (a *App) describeImage(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client := api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		get = client.GetTenantImage
 		getRaw = client.GetTenantImageRaw
 		resolve = client.ResolveTenantImage
 	case "admin":
-		client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		get = client.GetAdminImage
 		getRaw = client.GetAdminImageRaw
 		resolve = client.ResolveAdminImage

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +28,10 @@ type Endpoints struct {
 
 // Auth captures the credentials required by the CLI.
 type Auth struct {
-	PAT      string `json:"pat"`
-	Insecure bool   `json:"insecure"`
+	PAT       string `json:"pat,omitempty"`
+	TenantPAT string `json:"tenantPat,omitempty"`
+	AdminPAT  string `json:"adminPat,omitempty"`
+	Insecure  bool   `json:"insecure"`
 }
 
 // Config describes the hvx CLI configuration in a kubectl-inspired layout.
@@ -68,8 +71,15 @@ func Load() (*Config, error) {
 	}
 	defer f.Close()
 
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > 1<<20 {
+		return nil, errors.New("configuration exceeds 1 MiB")
+	}
 	var disk diskConfig
-	if err := json.NewDecoder(f).Decode(&disk); err != nil {
+	if err := json.Unmarshal(raw, &disk); err != nil {
 		return nil, err
 	}
 
@@ -90,7 +100,7 @@ func Save(cfg *Config) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -99,6 +109,7 @@ func Save(cfg *Config) error {
 		return err
 	}
 
+	defer os.Remove(tmp.Name())
 	enc := json.NewEncoder(tmp)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(cfg); err != nil {
@@ -107,6 +118,10 @@ func Save(cfg *Config) error {
 		return err
 	}
 
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
 		return err
@@ -132,6 +147,9 @@ func (c *Config) TenantServer() string {
 
 // SetTenantServer configures the tenant API server.
 func (c *Config) SetTenantServer(server string) {
+	if c.TenantServer() != strings.TrimSpace(server) {
+		c.Auth.TenantPAT = ""
+	}
 	c.Endpoints.Tenant.Server = strings.TrimSpace(server)
 }
 
@@ -142,6 +160,9 @@ func (c *Config) AdminServer() string {
 
 // SetAdminServer configures the admin API server.
 func (c *Config) SetAdminServer(server string) {
+	if c.AdminServer() != strings.TrimSpace(server) {
+		c.Auth.AdminPAT = ""
+	}
 	c.Endpoints.Admin.Server = strings.TrimSpace(server)
 }
 
@@ -153,6 +174,29 @@ func (c *Config) CurrentTenant() string {
 // SetCurrentTenant updates the profile tenant context.
 func (c *Config) SetCurrentTenant(tenant string) {
 	c.Profile.CurrentTenant = strings.TrimSpace(tenant)
+}
+
+// Token returns only the credential for the active API surface.
+func (c *Config) Token() string {
+	if c == nil {
+		return ""
+	}
+	switch c.Mode() {
+	case "tenant":
+		return strings.TrimSpace(c.Auth.TenantPAT)
+	case "admin":
+		return strings.TrimSpace(c.Auth.AdminPAT)
+	}
+	return ""
+}
+
+func (c *Config) SetToken(mode, token string) {
+	if mode == "tenant" {
+		c.Auth.TenantPAT = token
+	}
+	if mode == "admin" {
+		c.Auth.AdminPAT = token
+	}
 }
 
 func (c *Config) normalize() {
@@ -189,6 +233,14 @@ func (d *diskConfig) toConfig() *Config {
 		cfg.Auth = *d.Auth
 	}
 	cfg.backfillLegacy(d)
+	// A legacy PAT belongs only to its saved mode; never reuse it after switching.
+	if cfg.Mode() == "tenant" && cfg.Auth.TenantPAT == "" {
+		cfg.Auth.TenantPAT = cfg.Auth.PAT
+	}
+	if cfg.Mode() == "admin" && cfg.Auth.AdminPAT == "" {
+		cfg.Auth.AdminPAT = cfg.Auth.PAT
+	}
+	cfg.Auth.PAT = ""
 	cfg.normalize()
 	return cfg
 }
@@ -213,7 +265,7 @@ func (c *Config) backfillLegacy(d *diskConfig) {
 	if strings.TrimSpace(c.Auth.PAT) == "" {
 		c.Auth.PAT = d.LegacyPAT
 	}
-	if d.LegacyInsecure {
+	if d.Auth == nil && d.LegacyInsecure {
 		c.Auth.Insecure = true
 	}
 }

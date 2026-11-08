@@ -19,7 +19,7 @@ func (a *App) getResources(args []string) error {
 
 	fs := flag.NewFlagSet("get resources", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	tenantFlag := fs.String("tenant", "", "tenant override (admin mode or PAT override)")
+	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
@@ -40,7 +40,10 @@ func (a *App) getResources(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client = api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		if strings.TrimSpace(overrideTenantID) != "" {
+			return fmt.Errorf("--tenant is only supported in admin mode; tenant identity comes from credentials")
+		}
+		client = api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		tenantID := a.tenantContextID(overrideTenantID)
 		if a.outputFormat == "json" {
 			raw, err := client.ListTenantResourcesRaw(tenantID)
@@ -57,7 +60,7 @@ func (a *App) getResources(args []string) error {
 		if err != nil {
 			return err
 		}
-		client = api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client = api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		if a.outputFormat == "json" {
 			raw, err := client.ListAdminResourcesRaw(tenantID)
 			if err != nil {
@@ -124,7 +127,7 @@ func (a *App) getDisks(args []string) error {
 
 	fs := flag.NewFlagSet("get disks", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	tenantFlag := fs.String("tenant", "", "tenant override (admin mode or PAT override)")
+	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
@@ -145,7 +148,10 @@ func (a *App) getDisks(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client = api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		if strings.TrimSpace(overrideTenantID) != "" {
+			return fmt.Errorf("--tenant is only supported in admin mode; tenant identity comes from credentials")
+		}
+		client = api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		tenantID := a.tenantContextID(overrideTenantID)
 		if a.outputFormat == "json" {
 			raw, err := client.ListTenantDisksRaw(tenantID)
@@ -162,7 +168,7 @@ func (a *App) getDisks(args []string) error {
 		if err != nil {
 			return err
 		}
-		client = api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client = api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		if a.outputFormat == "json" {
 			raw, err := client.ListAdminDisksRaw(tenantID)
 			if err != nil {
@@ -250,7 +256,7 @@ func (a *App) getVMs(args []string) error {
 
 	fs := flag.NewFlagSet("get vms", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	tenantFlag := fs.String("tenant", "", "tenant override (admin mode or PAT override)")
+	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
@@ -271,7 +277,10 @@ func (a *App) getVMs(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client = api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		if strings.TrimSpace(overrideTenantID) != "" {
+			return fmt.Errorf("--tenant is only supported in admin mode; tenant identity comes from credentials")
+		}
+		client = api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		tenantID := a.tenantContextID(overrideTenantID)
 		vms, err = client.ListTenantVMs(tenantID)
 	case "admin":
@@ -279,7 +288,7 @@ func (a *App) getVMs(args []string) error {
 		if err != nil {
 			return err
 		}
-		client = api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client = api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		vms, err = client.ListAdminVMs(tenantID)
 	default:
 		return fmt.Errorf("invalid mode '%s'", cfg.Mode())
@@ -376,7 +385,8 @@ func (a *App) createDisk(args []string) error {
 	if err != nil {
 		return err
 	}
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
+	client.IdempotencyKey = a.idempotencyKey
 	raw, err := client.CreateStorageTask(tenantID, data)
 	if err != nil {
 		return err
@@ -393,8 +403,12 @@ func (a *App) deleteDisk(args []string) error {
 	fs := flag.NewFlagSet("delete-disk", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant ID override (admin mode)")
+	agentID := fs.String("agent-id", "", "Storage connector identity (optional when unambiguous)")
 	refID := fs.String("ref-id", "", "Disk reference ID")
 	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	if fs.NArg() != 0 {
 		return ErrUsage
 	}
 	diskRefID := strings.TrimSpace(*refID)
@@ -408,8 +422,9 @@ func (a *App) deleteDisk(args []string) error {
 		return err
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
-	raw, err := client.DeleteStorageTask(tenantID, diskRefID)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
+	client.IdempotencyKey = a.idempotencyKey
+	raw, err := client.DeleteStorageTask(tenantID, diskRefID, *agentID)
 	if err != nil {
 		return err
 	}
@@ -439,6 +454,9 @@ func (a *App) createVM(args []string) error {
 	cloudNetworkMode := fs.String("network-mode", "", "Cloud-init network mode (e.g. dhcp)")
 
 	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	if fs.NArg() != 0 {
 		return ErrUsage
 	}
 	if *name == "" || *ram == "" || *cpu <= 0 || *diskID == "" {
@@ -493,7 +511,8 @@ func (a *App) createVM(args []string) error {
 		CloudInit:  cloudInit,
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
+	client.IdempotencyKey = a.idempotencyKey
 	raw, err := client.CreateVMTask(tenantID, data, *agentID)
 	if err != nil {
 		return err
@@ -510,13 +529,19 @@ func (a *App) deleteVM(args []string) error {
 	fs := flag.NewFlagSet("delete-vm", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant ID override (admin mode)")
-	refID := fs.String("ref-id", "", "VM reference ID (name/guid)")
+	refID := fs.String("ref-id", "", "Canonical VM GUID")
 	guid := fs.String("guid", "", "Exact VM GUID")
 	forceStop := fs.Bool("force", false, "Force stop before delete")
 	agentID := fs.String("agent-id", "", "Agent/host ID override")
 
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
+	}
+	if fs.NArg() != 0 {
+		return ErrUsage
+	}
+	if *refID == "" {
+		*refID = *guid
 	}
 	if *guid == "" && *refID != "" {
 		*guid = *refID
@@ -536,7 +561,8 @@ func (a *App) deleteVM(args []string) error {
 		ForceStop: *forceStop,
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
+	client.IdempotencyKey = a.idempotencyKey
 	raw, err := client.DeleteVMTask(tenantID, *agentID, *refID, data)
 	if err != nil {
 		return err

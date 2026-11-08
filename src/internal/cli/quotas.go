@@ -17,7 +17,7 @@ func (a *App) getQuotas(args []string) error {
 
 	fs := flag.NewFlagSet("get quotas", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	tenantFlag := fs.String("tenant", "", "tenant override (admin mode or PAT override)")
+	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
@@ -38,7 +38,10 @@ func (a *App) getQuotas(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client = api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		if strings.TrimSpace(overrideTenantID) != "" {
+			return fmt.Errorf("--tenant is only supported in admin mode; tenant identity comes from credentials")
+		}
+		client = api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		tenantID := a.tenantContextID(overrideTenantID)
 		if a.outputFormat == "json" {
 			raw, err := client.ListTenantQuotasRaw(tenantID)
@@ -55,7 +58,7 @@ func (a *App) getQuotas(args []string) error {
 		if err != nil {
 			return err
 		}
-		client = api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client = api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		if a.outputFormat == "json" {
 			raw, err := client.ListAdminQuotasRaw(tenantID)
 			if err != nil {
