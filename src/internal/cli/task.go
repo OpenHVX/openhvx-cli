@@ -126,11 +126,7 @@ func (a *App) getTask(args []string) error {
 	action := firstNonEmpty(strings.TrimSpace(record.Action), firstString(payloadMap, "action"))
 	status := strings.TrimSpace(record.Status)
 	if status == "" {
-		if env.Success {
-			status = "unknown"
-		} else {
-			status = "unknown"
-		}
+		status = "unknown"
 	}
 	status = strings.ToUpper(status)
 
@@ -164,7 +160,7 @@ func (a *App) getTask(args []string) error {
 	columns := []tableColumn{
 		{Header: "TASK", Width: 36},
 		{Header: "ACTION", Width: 16},
-		{Header: "STATUS", Width: 10},
+		{Header: "STATUS", Width: 12},
 		{Header: "TARGET", Width: 20},
 		{Header: "TENANT", Width: 16},
 		{Header: "AGENT", Width: 0},
@@ -187,8 +183,8 @@ func (a *App) getTask(args []string) error {
 	kind := strings.TrimSpace(env.Kind)
 	schema := strings.TrimSpace(env.SchemaVersion)
 
-	fmt.Fprintf(a.stdout, "Scope: %s   Kind: %s   Schema: %s   Success: %t\n",
-		stringOrDash(scope), stringOrDash(kind), stringOrDash(schema), env.Success)
+	fmt.Fprintf(a.stdout, "Scope: %s   Kind: %s   Schema: %s\n",
+		stringOrDash(scope), stringOrDash(kind), stringOrDash(schema))
 	if record.CorrelationID != "" {
 		fmt.Fprintf(a.stdout, "Correlation: %s\n", record.CorrelationID)
 	}
