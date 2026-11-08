@@ -17,7 +17,7 @@ func (a *App) getImages(args []string) error {
 
 	fs := flag.NewFlagSet("get images", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() != 0 {
@@ -32,11 +32,11 @@ func (a *App) getImages(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client := api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		list = client.ListTenantImages
 		listRaw = client.ListTenantImagesRaw
 	case "admin":
-		client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		list = client.ListAdminImages
 		listRaw = client.ListAdminImagesRaw
 	default:
@@ -90,7 +90,7 @@ func (a *App) describeImage(args []string) error {
 	fs := flag.NewFlagSet("describe image", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	resolveFlag := fs.Bool("resolve", false, "resolve the image reference (raw response)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() < 1 {
@@ -113,12 +113,12 @@ func (a *App) describeImage(args []string) error {
 
 	switch cfg.Mode() {
 	case "tenant":
-		client := api.NewClient(cfg.TenantServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.TenantServer(), cfg.Token(), cfg.Auth.Insecure)
 		get = client.GetTenantImage
 		getRaw = client.GetTenantImageRaw
 		resolve = client.ResolveTenantImage
 	case "admin":
-		client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+		client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 		get = client.GetAdminImage
 		getRaw = client.GetAdminImageRaw
 		resolve = client.ResolveAdminImage

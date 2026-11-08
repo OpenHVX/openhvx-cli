@@ -1,0 +1,9 @@
+{
+  "action": "vm.power",
+  "target": {
+    "kind": "vm",
+    "agentId": "host-1",
+    "refId": "11111111-1111-4111-8111-111111111111"
+  },
+  "data": { "state": "start" }
+}

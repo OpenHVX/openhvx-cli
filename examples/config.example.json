@@ -1,0 +1,15 @@
+{
+  "profile": {
+    "mode": "tenant",
+    "currentTenant": "tenant-a"
+  },
+  "endpoints": {
+    "tenant": { "server": "https://api.openhvx.example.test" },
+    "admin": { "server": "https://admin-api.openhvx.example.test" }
+  },
+  "auth": {
+    "tenantPat": "REPLACE_WITH_TENANT_PAT",
+    "adminPat": "REPLACE_WITH_ADMIN_PAT",
+    "insecure": false
+  }
+}

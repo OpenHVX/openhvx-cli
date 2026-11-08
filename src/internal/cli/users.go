@@ -21,7 +21,7 @@ func (a *App) createUser(args []string) error {
 	password := fs.String("password", "", "user password")
 	tenant := fs.String("tenant", "", "tenant ID override")
 	rolesFlag := fs.String("roles", "", "comma-separated roles")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if *email == "" || *password == "" || *rolesFlag == "" {
@@ -37,7 +37,7 @@ func (a *App) createUser(args []string) error {
 	if err != nil {
 		return err
 	}
-	client := api.NewClient(cfg.AdminServer(), cfg.Auth.PAT, cfg.Auth.Insecure)
+	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
 	payload := api.TenantUserRequest{
 		Email:    *email,
 		Password: *password,

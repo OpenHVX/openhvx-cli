@@ -22,10 +22,12 @@ const (
 func (a *App) initCommand(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	contextName := fs.String("context", "", "Named context to initialize")
 	modeFlag := fs.String("mode", "", "target mode: tenant or admin")
 	tenantServer := fs.String("tenant-server", "", "tenant API base URL")
 	adminServer := fs.String("admin-server", "", "admin API base URL")
 	username := fs.String("username", "", "login username or email")
+	passwordStdin := fs.Bool("password-stdin", false, "read login password from stdin")
 	password := fs.String("password", "", "login password (or set HVX_PASSWORD)")
 	insecure := fs.Bool("insecure", false, "skip TLS verification (dev only)")
 	tenantID := fs.String("tenant-id", "", "default tenant ID (admin mode)")
@@ -34,10 +36,16 @@ func (a *App) initCommand(args []string) error {
 	patPathOverride := fs.String("pat-path", "", "override PAT creation API path")
 	patLabel := fs.String("pat-label", "", "label to assign to the generated PAT")
 	patExpires := fs.Int("pat-expiry-days", 0, "set PAT expiration in days (optional)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 
+	if fs.NArg() != 0 {
+		return ErrUsage
+	}
+	if *patExpires < 0 {
+		return fmt.Errorf("--pat-expiry-days must be nonnegative")
+	}
 	mode := strings.ToLower(strings.TrimSpace(*modeFlag))
 	if mode != "tenant" && mode != "admin" {
 		return fmt.Errorf("--mode must be 'tenant' or 'admin'")
@@ -48,8 +56,21 @@ func (a *App) initCommand(args []string) error {
 		return fmt.Errorf("--username is required")
 	}
 
+	if *passwordStdin && *password != "" {
+		return fmt.Errorf("--password and --password-stdin are mutually exclusive")
+	}
 	pass := *password
-	if pass == "" {
+	if *passwordStdin {
+		raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4097))
+		if err != nil {
+			return err
+		}
+		if len(raw) > 4096 {
+			return fmt.Errorf("password input exceeds 4096 bytes")
+		}
+		pass = strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	}
+	if pass == "" && !*passwordStdin {
 		pass = os.Getenv("HVX_PASSWORD")
 	}
 	if pass == "" {
@@ -128,8 +149,12 @@ func (a *App) initCommand(args []string) error {
 		a.cfg = cfg
 	}
 
+	if *contextName != "" {
+		if err := cfg.InitContext(*contextName); err != nil {
+			return err
+		}
+	}
 	cfg.SetMode(mode)
-	cfg.Auth.PAT = patResp.Token
 	cfg.Auth.Insecure = *insecure
 
 	if mode == "tenant" {
@@ -154,6 +179,7 @@ func (a *App) initCommand(args []string) error {
 		cfg.SetCurrentTenant(tenantContext)
 	}
 
+	cfg.SetToken(mode, patResp.Token)
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("unable to save config: %w", err)
 	}

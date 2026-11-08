@@ -1,0 +1,19 @@
+# Local credentials and environment
+.env
+.env.*
+config.json
+*.secret
+*.pem
+*.key
+
+# Build output and coverage
+bin/
+dist/
+*.exe
+coverage.out
+*.test
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
