@@ -17,14 +17,12 @@ func (a *App) createTask(args []string) error {
 	if err := a.ensureAccess("create task", modeTenant|modeAdmin); err != nil {
 		return err
 	}
-	if a.idempotencyKey == "" {
-		return fmt.Errorf("--idempotency-key is required for task submission")
-	}
 	fs := flag.NewFlagSet("create task", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("file", "", "HTTP task JSON file, or - for stdin")
+	fs.StringVar(path, "f", "", "HTTP task JSON file")
 	tenant := fs.String("tenant", "", "Admin tenant override")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+	if err := parseFlags(fs, args); err != nil || fs.NArg() != 0 {
 		return ErrUsage
 	}
 	if *path == "" {
@@ -80,6 +78,7 @@ func (a *App) createTask(args []string) error {
 	}
 	client := api.NewClient(server, a.cfg.Token(), a.cfg.Auth.Insecure)
 	client.IdempotencyKey = a.idempotencyKey
+	a.trackTasks(client)
 	result, err := client.SubmitTask(a.cfg.Mode(), raw)
 	if err != nil {
 		return err
@@ -104,14 +103,14 @@ func (a *App) waitCommand(args []string) error {
 	fs := flag.NewFlagSet("wait task", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	id := fs.String("id", "", "Task ID")
-	timeout := fs.Duration("timeout", 5*time.Minute, "Overall polling duration")
+	timeout := fs.Duration("timeout", a.waitTimeout, "Overall polling duration")
 	interval := fs.Duration("interval", 2*time.Second, "Polling interval")
 	rest := args[1:]
 	if len(rest) > 0 && rest[0] != "" && rest[0][0] != '-' {
 		*id = rest[0]
 		rest = rest[1:]
 	}
-	if err := fs.Parse(rest); err != nil || fs.NArg() != 0 {
+	if err := parseFlags(fs, rest); err != nil || fs.NArg() != 0 {
 		return ErrUsage
 	}
 	if *id == "" || *timeout <= 0 || *interval <= 0 {

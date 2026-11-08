@@ -13,7 +13,8 @@ import (
 	"hvx-cli/internal/config"
 )
 
-func testConfig(server, mode string) *config.Config {
+func testConfig(t *testing.T, server, mode string) *config.Config {
+	t.Setenv("HVX_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 	cfg := &config.Config{}
 	cfg.SetMode(mode)
 	cfg.SetTenantServer(server)
@@ -33,10 +34,11 @@ func taskFile(t *testing.T, body string) string {
 }
 
 func TestGenericSubmissionUsesTenantHTTPContract(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.URL.Path != "/api/v1/tenant/tasks" || r.Header.Get("Authorization") != "Bearer tenant-pat" || r.Header.Get("Idempotency-Key") != "operation-key" {
+		if r.URL.Path != "/api/v1/tenant/tasks" || r.Header.Get("Authorization") != "Bearer tenant-pat" || r.Header.Get("Idempotency-Key") == "" {
 			t.Error("wrong route or credentials")
 		}
 		var body map[string]any
@@ -50,15 +52,15 @@ func TestGenericSubmissionUsesTenantHTTPContract(t *testing.T) {
 	defer server.Close()
 	path := taskFile(t, `{"action":"vm.power","target":{"kind":"vm","agentId":"host","refId":"11111111-1111-4111-8111-111111111111"},"data":{"state":"start"}}`)
 	var out, stderr bytes.Buffer
-	a := NewApp(testConfig(server.URL, "tenant"), &out, &stderr)
+	a := NewApp(testConfig(t, server.URL, "tenant"), &out, &stderr)
 	if err := a.Execute([]string{"--idempotency-key", "operation-key", "-o", "json", "create", "task", "--file", path}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 || !strings.Contains(out.String(), `"taskId":"task-a"`) || strings.Contains(out.String(), "tenant-pat") {
 		t.Fatal("invalid output")
 	}
-	if err := a.Execute([]string{"create", "task", "--file", path}); err == nil || calls != 1 {
-		t.Fatal("missing key or stale key allowed submission")
+	if err := a.Execute([]string{"create", "task", "--file", path}); err != nil || calls != 2 {
+		t.Fatal("automatic key submission failed", err)
 	}
 }
 
@@ -75,7 +77,7 @@ func TestGenericAdminSubmissionResolvesTenantAndRejectsConflict(t *testing.T) {
 		_, _ = w.Write([]byte(`{"taskId":"task-a"}`))
 	}))
 	defer server.Close()
-	a := NewApp(testConfig(server.URL, "admin"), &bytes.Buffer{}, &bytes.Buffer{})
+	a := NewApp(testConfig(t, server.URL, "admin"), &bytes.Buffer{}, &bytes.Buffer{})
 	if err := a.Execute([]string{"--idempotency-key=key", "create", "task", "--file", taskFile(t, `{"action":"echo","target":{"kind":"vm"},"data":{}}`)}); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,7 @@ func TestDescribeTaskSupportsTenantModeAndContextHidesTokens(t *testing.T) {
 	}))
 	defer server.Close()
 	var out bytes.Buffer
-	a := NewApp(testConfig(server.URL, "tenant"), &out, &bytes.Buffer{})
+	a := NewApp(testConfig(t, server.URL, "tenant"), &out, &bytes.Buffer{})
 	if err := a.Execute([]string{"describe", "task", "task-a"}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +132,7 @@ func TestWaitPollsWithoutResubmittingAndDoesNotTreatReconciliationAsSuccess(t *t
 	}))
 	defer server.Close()
 	var out bytes.Buffer
-	a := NewApp(testConfig(server.URL, "tenant"), &out, &bytes.Buffer{})
+	a := NewApp(testConfig(t, server.URL, "tenant"), &out, &bytes.Buffer{})
 	if err := a.Execute([]string{"wait", "task", "task-a", "--timeout", "1s", "--interval", "1ms"}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestWaitPollsWithoutResubmittingAndDoesNotTreatReconciliationAsSuccess(t *t
 func TestWaitDeadlineCancelsSlowHTTPRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	defer server.Close()
-	a := NewApp(testConfig(server.URL, "tenant"), &bytes.Buffer{}, &bytes.Buffer{})
+	a := NewApp(testConfig(t, server.URL, "tenant"), &bytes.Buffer{}, &bytes.Buffer{})
 	if err := a.Execute([]string{"wait", "task", "task-a", "--timeout", "20ms"}); err == nil {
 		t.Fatal("deadline not enforced")
 	}
@@ -163,7 +165,7 @@ func TestInitSeparatesCredentialsAndNeverPrintsTokens(t *testing.T) {
 		_, _ = w.Write([]byte(`{"token":"new-tenant-pat"}`))
 	}))
 	defer server.Close()
-	cfg := testConfig(server.URL, "admin")
+	cfg := testConfig(t, server.URL, "admin")
 	var out bytes.Buffer
 	a := NewApp(cfg, &out, &bytes.Buffer{})
 	if err := a.Execute([]string{"init", "--mode", "tenant", "--tenant-server", server.URL, "--username", "test@example.test"}); err != nil {

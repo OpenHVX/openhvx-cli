@@ -20,7 +20,7 @@ func (a *App) describeTask(args []string) error {
 	fs := flag.NewFlagSet("describe task", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	idFlag := fs.String("id", "", "task ID")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() > 1 {
@@ -73,7 +73,7 @@ func (a *App) getTask(args []string) error {
 	fs := flag.NewFlagSet("get task", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	idFlag := fs.String("id", "", "task ID")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() > 1 {

@@ -21,7 +21,7 @@ func (a *App) createUser(args []string) error {
 	password := fs.String("password", "", "user password")
 	tenant := fs.String("tenant", "", "tenant ID override")
 	rolesFlag := fs.String("roles", "", "comma-separated roles")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if *email == "" || *password == "" || *rolesFlag == "" {

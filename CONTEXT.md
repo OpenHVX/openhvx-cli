@@ -11,7 +11,7 @@ Core constraints:
 
 - `internal/cli` parses commands and formats output; `internal/api` owns HTTP requests.
 - `internal/config` persists contexts and credentials; tenant and admin tokens stay separate.
-- Every task submission requires an explicit stable idempotency key.
+- Every task submission automatically receives a stable idempotency key; pending identities survive CLI restarts.
 - HTTP acceptance is not host completion; waiting only reads task status.
 - The CLI does not publish AMQP messages or construct agent protocol v2 envelopes.
 - TLS verification is enabled by default; HTTP redirects are not followed.
@@ -19,3 +19,7 @@ Core constraints:
 
 See [checks](docs/development.md#checks) and
 [known limitations](docs/architecture.md#known-limitations).
+
+Named contexts own their mode, tenant, endpoints, and credentials. Resource names
+must resolve uniquely before mutation. `get tasks` covers locally tracked tasks;
+there is no server-side global task-list or execution-log API.

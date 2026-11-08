@@ -10,17 +10,6 @@ import (
 	"testing"
 )
 
-func TestTaskRequiresKeyBeforeAnyRequest(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
-	defer server.Close()
-	client := NewClient(server.URL, "test-pat", false)
-	_, err := client.CreateStorageTask("tenant-a", StorageCreateData{Name: "disk", ImageID: "image", SizeMB: 1024})
-	if err == nil || calls != 0 {
-		t.Fatalf("missing key must prevent request: %v, calls=%d", err, calls)
-	}
-}
-
 func TestTaskRetriesPreserveKeyPayloadAndAcceptedIdentity(t *testing.T) {
 	var mu sync.Mutex
 	mutations := 0

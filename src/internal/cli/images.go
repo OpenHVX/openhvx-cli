@@ -17,7 +17,7 @@ func (a *App) getImages(args []string) error {
 
 	fs := flag.NewFlagSet("get images", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() != 0 {
@@ -90,7 +90,7 @@ func (a *App) describeImage(args []string) error {
 	fs := flag.NewFlagSet("describe image", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	resolveFlag := fs.Bool("resolve", false, "resolve the image reference (raw response)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() < 1 {

@@ -18,7 +18,7 @@ func (a *App) getQuotas(args []string) error {
 	fs := flag.NewFlagSet("get quotas", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() > 1 {

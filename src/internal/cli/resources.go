@@ -20,7 +20,7 @@ func (a *App) getResources(args []string) error {
 	fs := flag.NewFlagSet("get resources", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() > 1 {
@@ -128,7 +128,7 @@ func (a *App) getDisks(args []string) error {
 	fs := flag.NewFlagSet("get disks", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() > 1 {
@@ -257,7 +257,7 @@ func (a *App) getVMs(args []string) error {
 	fs := flag.NewFlagSet("get vms", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant override (admin mode only)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() > 1 {
@@ -345,7 +345,7 @@ func (a *App) getVMs(args []string) error {
 }
 
 func (a *App) createDisk(args []string) error {
-	if err := a.ensureAccess("create disk", modeAdmin); err != nil {
+	if err := a.ensureAccess("create disk", modeTenant|modeAdmin); err != nil {
 		return err
 	}
 
@@ -353,13 +353,20 @@ func (a *App) createDisk(args []string) error {
 	fs.SetOutput(io.Discard)
 	tenantFlag := fs.String("tenant", "", "tenant ID override (admin mode)")
 	name := fs.String("name", "", "Disk name")
+	agentID := fs.String("agent-id", "", "Storage connector identity")
 	imageID := fs.String("image-id", "", "Image ID to seed the disk")
 	sizeMB := fs.Int("size-mb", 0, "Disk size in MB")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
-	if fs.NArg() != 0 {
+	if fs.NArg() > 1 {
 		return ErrUsage
+	}
+	if fs.NArg() == 1 {
+		if *name != "" {
+			return fmt.Errorf("name supplied twice")
+		}
+		*name = fs.Arg(0)
 	}
 
 	diskName := strings.TrimSpace(*name)
@@ -380,23 +387,14 @@ func (a *App) createDisk(args []string) error {
 		SizeMB:  *sizeMB,
 	}
 
-	cfg := a.cfg
-	tenantID, err := a.resolveTenantID("create disk", *tenantFlag)
-	if err != nil {
-		return err
-	}
-	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
-	client.IdempotencyKey = a.idempotencyKey
-	raw, err := client.CreateStorageTask(tenantID, data)
-	if err != nil {
-		return err
-	}
-
-	return a.printTaskResponse("storage.create", raw)
+	return a.submitResource("storage.create", *tenantFlag, api.TaskTarget{Kind: "storage", AgentID: *agentID}, data)
 }
 
 func (a *App) deleteDisk(args []string) error {
-	if err := a.ensureAccess("delete disk", modeAdmin); err != nil {
+	if hasNamedResource(args) {
+		return a.deleteNamedResource("disk", args)
+	}
+	if err := a.ensureAccess("delete disk", modeTenant|modeAdmin); err != nil {
 		return err
 	}
 
@@ -405,7 +403,7 @@ func (a *App) deleteDisk(args []string) error {
 	tenantFlag := fs.String("tenant", "", "tenant ID override (admin mode)")
 	agentID := fs.String("agent-id", "", "Storage connector identity (optional when unambiguous)")
 	refID := fs.String("ref-id", "", "Disk reference ID")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() != 0 {
@@ -416,24 +414,11 @@ func (a *App) deleteDisk(args []string) error {
 		return fmt.Errorf("--ref-id is required")
 	}
 
-	cfg := a.cfg
-	tenantID, err := a.resolveTenantID("delete disk", *tenantFlag)
-	if err != nil {
-		return err
-	}
-
-	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
-	client.IdempotencyKey = a.idempotencyKey
-	raw, err := client.DeleteStorageTask(tenantID, diskRefID, *agentID)
-	if err != nil {
-		return err
-	}
-
-	return a.printTaskResponse("storage.delete", raw)
+	return a.submitResource("storage.delete", *tenantFlag, api.TaskTarget{Kind: "storage", AgentID: *agentID, RefID: diskRefID}, api.StorageDeleteData{RefID: diskRefID})
 }
 
 func (a *App) createVM(args []string) error {
-	if err := a.ensureAccess("create vm", modeAdmin); err != nil {
+	if err := a.ensureAccess("create vm", modeTenant|modeAdmin); err != nil {
 		return err
 	}
 
@@ -453,21 +438,23 @@ func (a *App) createVM(args []string) error {
 	cloudSSHKeys := fs.String("ssh-keys", "", "Comma-separated SSH public keys for cloud-init")
 	cloudNetworkMode := fs.String("network-mode", "", "Cloud-init network mode (e.g. dhcp)")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
-	if fs.NArg() != 0 {
+	if fs.NArg() > 1 {
 		return ErrUsage
+	}
+	if fs.NArg() == 1 {
+		if *name != "" {
+			return fmt.Errorf("name supplied twice")
+		}
+		*name = fs.Arg(0)
 	}
 	if *name == "" || *ram == "" || *cpu <= 0 || *diskID == "" {
 		return fmt.Errorf("--name, --ram, --cpu, and --disk-id are required")
 	}
 
-	cfg := a.cfg
-	tenantID, err := a.resolveTenantID("create vm", *tenantFlag)
-	if err != nil {
-		return err
-	}
+	var err error
 
 	var cloudInit json.RawMessage
 	if *cloudInitPath != "" && (strings.TrimSpace(*cloudHostname) != "" || strings.TrimSpace(*cloudUser) != "" || strings.TrimSpace(*cloudSSHKeys) != "" || strings.TrimSpace(*cloudNetworkMode) != "") {
@@ -511,18 +498,14 @@ func (a *App) createVM(args []string) error {
 		CloudInit:  cloudInit,
 	}
 
-	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
-	client.IdempotencyKey = a.idempotencyKey
-	raw, err := client.CreateVMTask(tenantID, data, *agentID)
-	if err != nil {
-		return err
-	}
-
-	return a.printTaskResponse("vm.create", raw)
+	return a.submitResource("vm.create", *tenantFlag, api.TaskTarget{Kind: "vm", AgentID: *agentID}, data)
 }
 
 func (a *App) deleteVM(args []string) error {
-	if err := a.ensureAccess("delete vm", modeAdmin); err != nil {
+	if hasNamedResource(args) {
+		return a.deleteNamedResource("vm", args)
+	}
+	if err := a.ensureAccess("delete vm", modeTenant|modeAdmin); err != nil {
 		return err
 	}
 
@@ -534,7 +517,7 @@ func (a *App) deleteVM(args []string) error {
 	forceStop := fs.Bool("force", false, "Force stop before delete")
 	agentID := fs.String("agent-id", "", "Agent/host ID override")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() != 0 {
@@ -550,28 +533,22 @@ func (a *App) deleteVM(args []string) error {
 		return fmt.Errorf("--ref-id and --guid are required")
 	}
 
-	cfg := a.cfg
-	tenantID, err := a.resolveTenantID("delete vm", *tenantFlag)
-	if err != nil {
-		return err
+	if !api.ValidGUID(*refID) || !strings.EqualFold(*refID, *guid) {
+		return fmt.Errorf("--ref-id and --guid must identify the same canonical Hyper-V GUID")
 	}
-
-	data := api.VMDeleteData{
-		GUID:      *guid,
-		ForceStop: *forceStop,
-	}
-
-	client := api.NewClient(cfg.AdminServer(), cfg.Token(), cfg.Auth.Insecure)
-	client.IdempotencyKey = a.idempotencyKey
-	raw, err := client.DeleteVMTask(tenantID, *agentID, *refID, data)
-	if err != nil {
-		return err
-	}
-
-	return a.printTaskResponse("vm.delete", raw)
+	data := api.VMDeleteData{GUID: strings.ToLower(*guid), ForceStop: *forceStop}
+	return a.submitResource("vm.delete", *tenantFlag, api.TaskTarget{Kind: "vm", AgentID: *agentID, RefID: strings.ToLower(*refID)}, data)
 }
 
 func (a *App) printTaskResponse(action string, raw []byte) error {
+	if a.wait {
+		id, _ := parseTaskResponse(raw)
+		if id == "" {
+			return fmt.Errorf("acceptance response missing taskId")
+		}
+		fmt.Fprintf(a.stderr, "Task: %s\n", id)
+		return a.waitCommand([]string{"task", id, "--timeout", a.waitTimeout.String()})
+	}
 	if a.outputFormat == "json" {
 		raw = append(bytes.TrimSpace(raw), '\n')
 		if _, err := a.stdout.Write(raw); err != nil {

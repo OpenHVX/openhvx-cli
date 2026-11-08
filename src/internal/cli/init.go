@@ -22,6 +22,7 @@ const (
 func (a *App) initCommand(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	contextName := fs.String("context", "", "Named context to initialize")
 	modeFlag := fs.String("mode", "", "target mode: tenant or admin")
 	tenantServer := fs.String("tenant-server", "", "tenant API base URL")
 	adminServer := fs.String("admin-server", "", "admin API base URL")
@@ -35,7 +36,7 @@ func (a *App) initCommand(args []string) error {
 	patPathOverride := fs.String("pat-path", "", "override PAT creation API path")
 	patLabel := fs.String("pat-label", "", "label to assign to the generated PAT")
 	patExpires := fs.Int("pat-expiry-days", 0, "set PAT expiration in days (optional)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return ErrUsage
 	}
 
@@ -148,6 +149,11 @@ func (a *App) initCommand(args []string) error {
 		a.cfg = cfg
 	}
 
+	if *contextName != "" {
+		if err := cfg.InitContext(*contextName); err != nil {
+			return err
+		}
+	}
 	cfg.SetMode(mode)
 	cfg.Auth.Insecure = *insecure
 

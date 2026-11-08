@@ -1,7 +1,8 @@
 # Development
 
 The Go module lives under `src`. Use Go 1.25 or newer, with current security patches.
-There are no third-party runtime modules or broker/database dependencies.
+The CLI uses a small cross-platform file-lock dependency and has no broker/database
+dependency. `go.sum` pins downloaded module content.
 
 ## Build
 
@@ -30,7 +31,8 @@ go build ./...
 Formatting should report no files. Tests use local HTTP servers and temporary
 configuration directories. They cover request paths and credentials, idempotency
 headers and stable retry payloads, redirect refusal, task decoding, polling deadlines,
-mode isolation, and legacy configuration migration. No test contacts real hosts or
+mode isolation, legacy and named configuration migration, immutable receipt replay,
+resource-name ambiguity, and local request locking. No test contacts real hosts or
 uses a production PAT.
 
 ## Continuous integration

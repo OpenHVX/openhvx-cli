@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"hvx-cli/internal/config"
 )
@@ -26,30 +27,41 @@ Primary commands:
   hvx get images                           # list VM images
   hvx get quotas [--tenant TENANT_ID]      # print quota usage
   hvx get tenants                          # admin mode: list all tenants
+  hvx get tasks                           # tasks tracked locally for this identity
+  hvx get requests                        # local submission receipts
   hvx get task --id TASK_ID                # fetch a task payload in the current mode
 
   hvx describe image [--resolve] IMAGE_ID  # describe a VM image (raw or summarized)
+  hvx describe vm NAME                    # resolve one VM from current inventory
+  hvx start|stop|restart vm NAME           # resolve and submit a power operation
+  hvx delete vm NAME [--agent-id HOST]     # refuse ambiguous names
   hvx describe task TASK_ID                # show task payload/status
 
   hvx create disk --name NAME --size-mb MB # create a storage disk
-  hvx create vm [options]                  # admin mode: submit a VM creation task
+  hvx create vm [options]                  # submit a VM creation task
   hvx create tenant --name NAME --id ID  # admin mode: create a tenant
-  hvx delete vm [options]                  # admin mode: submit a VM deletion task
-  hvx delete disk --ref-id REF_ID          # admin mode: submit a disk deletion task
+  hvx delete vm [options]                  # submit a VM deletion task
+  hvx delete disk --ref-id REF_ID          # submit a disk deletion task
   hvx delete tenant TENANT_ID              # admin mode: delete a tenant
   hvx create user [options]                # admin mode: create a tenant user
   hvx create quota-recalc --tenant ID      # admin mode: trigger a quota recalculation
 
+  hvx config get-contexts                  # list named environments/accounts
+  hvx config use-context NAME             # switch the active context
+  hvx context save NAME                   # save the current setup under a name
   hvx context show                         # print current profile/endpoints
   hvx context set-mode tenant|admin        # change the active profile mode
   hvx context set-tenant TENANT_ID         # update the tenant context (admin mode)
+  hvx retry REQUEST_ID                    # replay the saved submission, not its source file
+  hvx create -f task.json                  # submit an HTTP task file
   hvx create task --file task.json          # submit an HTTP task payload in either mode
   hvx wait task TASK_ID [--timeout 5m]      # poll until done/error; never resubmit
   hvx init [options]                       # initialize config.json and fetch a PAT
 
 Options:
   -o, --output text|json   # change output format (default: text)
-  --idempotency-key KEY    # required for every task submission; reuse on retries
+  --wait [--timeout 5m]    # wait for task completion after submission
+  --idempotency-key KEY    # optional override; task keys are generated automatically
 
 Configuration:
   The CLI loads its config from ~/.config/hvx/config.json (or $HVX_CONFIG)
@@ -77,7 +89,7 @@ Modes:
       * get/resources, get/vms, get/quotas -> tenant endpoint (/api/v1/tenant/*)
   - "admin" mode:
       * reading data requires --tenant or profile.currentTenant
-      * create/delete commands target the admin endpoint (/api/v1/admin/*)
+      * task commands target the selected API surface
 `
 
 // Usage returns the CLI usage instructions.
@@ -92,6 +104,8 @@ type App struct {
 	stderr         io.Writer
 	outputFormat   string
 	idempotencyKey string
+	wait           bool
+	waitTimeout    time.Duration
 }
 
 type commandMode uint8
@@ -123,6 +137,8 @@ func NewApp(cfg *config.Config, stdout, stderr io.Writer) *App {
 // Execute dispatches the CLI command according to the provided arguments.
 func (a *App) Execute(args []string) error {
 	a.idempotencyKey = ""
+	a.wait = false
+	a.waitTimeout = 5 * time.Minute
 	a.outputFormat = "text"
 	if len(args) == 0 {
 		return ErrUsage
@@ -141,6 +157,12 @@ func (a *App) Execute(args []string) error {
 	case "help", "--help", "-h":
 		_, err := fmt.Fprint(a.stdout, Usage())
 		return err
+	case "retry":
+		return a.retryRequest(parsed[1:])
+	case "start", "stop", "restart":
+		return a.powerVM(parsed[0], parsed[1:])
+	case "config":
+		return a.contextCommand(parsed[1:])
 	case "wait":
 		return a.waitCommand(parsed[1:])
 	case "get":
@@ -205,6 +227,30 @@ func (a *App) parseGlobalOptions(args []string) ([]string, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--wait":
+			a.wait = true
+		case strings.HasPrefix(arg, "--wait="):
+			v := strings.TrimPrefix(arg, "--wait=")
+			if v != "true" && v != "false" {
+				return nil, ErrUsage
+			}
+			a.wait = v == "true"
+		case arg == "--timeout":
+			if i+1 >= len(args) {
+				return nil, ErrUsage
+			}
+			duration, err := time.ParseDuration(args[i+1])
+			if err != nil || duration <= 0 {
+				return nil, ErrUsage
+			}
+			a.waitTimeout = duration
+			i++
+		case strings.HasPrefix(arg, "--timeout="):
+			duration, err := time.ParseDuration(strings.TrimPrefix(arg, "--timeout="))
+			if err != nil || duration <= 0 {
+				return nil, ErrUsage
+			}
+			a.waitTimeout = duration
 		case arg == "--idempotency-key":
 			if i+1 >= len(args) || a.idempotencyKey != "" {
 				return nil, ErrUsage
@@ -271,11 +317,15 @@ func (a *App) getCommand(args []string) error {
 		return ErrUsage
 	}
 	switch args[0] {
-	case "disks":
+	case "tasks":
+		return a.getTasks(args[1:])
+	case "requests":
+		return a.getRequests(args[1:])
+	case "disk", "disks":
 		return a.getDisks(args[1:])
-	case "resources":
+	case "resource", "resources":
 		return a.getResources(args[1:])
-	case "vms":
+	case "vm", "vms":
 		return a.getVMs(args[1:])
 	case "images":
 		return a.getImages(args[1:])
@@ -295,6 +345,8 @@ func (a *App) describeCommand(args []string) error {
 		return ErrUsage
 	}
 	switch args[0] {
+	case "vm", "disk":
+		return a.describeResource(args[0], args[1:])
 	case "image":
 		return a.describeImage(args[1:])
 	case "task":
@@ -305,6 +357,9 @@ func (a *App) describeCommand(args []string) error {
 }
 
 func (a *App) createCommand(args []string) error {
+	if len(args) > 0 && (args[0] == "-f" || args[0] == "--file" || strings.HasPrefix(args[0], "--file=") || strings.HasPrefix(args[0], "-f=")) {
+		return a.createTask(args)
+	}
 	if len(args) == 0 {
 		return ErrUsage
 	}

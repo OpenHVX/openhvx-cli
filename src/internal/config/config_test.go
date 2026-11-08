@@ -99,3 +99,46 @@ func TestLegacyFlatConfigRemainsReadable(t *testing.T) {
 		t.Fatal("legacy fields lost")
 	}
 }
+
+func TestNamedContextsKeepEnvironmentCredentialsSeparate(t *testing.T) {
+	t.Setenv("HVX_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	cfg := &Config{}
+	cfg.SetMode("tenant")
+	cfg.SetTenantServer("https://lab.example.test")
+	cfg.SetToken("tenant", "lab-token")
+	if err := cfg.SaveContext("lab"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.InitContext("prod"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token() != "" || cfg.TenantServer() != "" {
+		t.Fatal("new context inherited credentials")
+	}
+	cfg.SetMode("admin")
+	cfg.SetAdminServer("https://prod.example.test")
+	cfg.SetToken("admin", "prod-token")
+	if err := Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.UseContext("lab"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode() != "tenant" || cfg.Token() != "lab-token" || cfg.TenantServer() != "https://lab.example.test" {
+		t.Fatal("context identity mixed")
+	}
+	if err := Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.UseContext("prod"); err != nil || cfg.Token() != "prod-token" {
+		t.Fatal("production context lost", err)
+	}
+}

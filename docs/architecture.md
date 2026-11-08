@@ -17,9 +17,9 @@ The active mode selects its own PAT and endpoint. Changing an endpoint through t
 configuration setters clears that endpoint's credential. Legacy single-PAT files
 migrate the token only into their saved mode.
 
-Task submission requires an explicit `Idempotency-Key`. Retries must preserve the
-same authenticated principal, mode, tenant, action, target, and data. The CLI does
-not implement a persistent retry queue or an application-level automatic retry loop.
+Task commands create durable local receipts before sending. Explicit retry preserves
+body bytes, key, endpoint, and credentials; new invocations represent new operations.
+`internal/requests` owns receipt persistence and per-request file locks.
 
 HTTP clients verify TLS by default, use a 10-second request timeout, refuse redirects,
 reject embedded URL credentials, and bound response reads to 16 MiB. Waiting adds
@@ -31,11 +31,11 @@ The CLI is a client, not an authorization boundary. Backend validation remains
 necessary even when local validation succeeds. Tests use simulated HTTP endpoints;
 they do not run a complete gateway, backend, RabbitMQ, and host-agent deployment.
 
-Convenience VM/disk mutation commands currently use the admin API. The generic
-`create task` command supports both tenant and admin APIs. Not every backend
+VM/disk task mutations and generic file submission support tenant and admin APIs. Not every backend
 endpoint has a dedicated CLI command.
 
-Credentials are stored in a local JSON file, not an OS credential vault. Unix saves
+Credentials and named contexts are stored in local JSON, not an OS credential vault.
+Receipts retain exact payload bytes, which may contain sensitive cloud-init data. Unix saves
 use private file permissions; Windows access protection depends on filesystem ACLs.
 Configuration replacement avoids partial JSON files but does not merge simultaneous
 updates from multiple CLI processes. Avoid concurrent context/init changes.

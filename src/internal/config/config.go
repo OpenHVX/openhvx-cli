@@ -35,10 +35,18 @@ type Auth struct {
 }
 
 // Config describes the hvx CLI configuration in a kubectl-inspired layout.
-type Config struct {
+type NamedContext struct {
 	Profile   Profile   `json:"profile"`
 	Endpoints Endpoints `json:"endpoints"`
 	Auth      Auth      `json:"auth"`
+}
+
+type Config struct {
+	CurrentContext string                  `json:"currentContext,omitempty"`
+	Contexts       map[string]NamedContext `json:"contexts,omitempty"`
+	Profile        Profile                 `json:"profile"`
+	Endpoints      Endpoints               `json:"endpoints"`
+	Auth           Auth                    `json:"auth"`
 }
 
 // Path returns the path used to load the configuration file.
@@ -83,6 +91,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	if disk.CurrentContext != "" {
+		if _, ok := disk.Contexts[disk.CurrentContext]; !ok {
+			return nil, errors.New("currentContext references an unknown context")
+		}
+	}
 	cfg := disk.toConfig()
 	return cfg, nil
 }
@@ -93,6 +106,7 @@ func Save(cfg *Config) error {
 		return errors.New("config is nil")
 	}
 	cfg.normalize()
+	cfg.snapshotContext()
 
 	path, err := Path()
 	if err != nil {
@@ -208,9 +222,11 @@ func (c *Config) normalize() {
 }
 
 type diskConfig struct {
-	Profile   *Profile   `json:"profile"`
-	Endpoints *Endpoints `json:"endpoints"`
-	Auth      *Auth      `json:"auth"`
+	CurrentContext string                  `json:"currentContext"`
+	Contexts       map[string]NamedContext `json:"contexts"`
+	Profile        *Profile                `json:"profile"`
+	Endpoints      *Endpoints              `json:"endpoints"`
+	Auth           *Auth                   `json:"auth"`
 
 	LegacyMode          string `json:"mode"`
 	LegacyTenantServer  string `json:"tenant_server"`
@@ -222,7 +238,7 @@ type diskConfig struct {
 }
 
 func (d *diskConfig) toConfig() *Config {
-	cfg := &Config{}
+	cfg := &Config{CurrentContext: d.CurrentContext, Contexts: d.Contexts}
 	if d.Profile != nil {
 		cfg.Profile = *d.Profile
 	}
@@ -242,6 +258,13 @@ func (d *diskConfig) toConfig() *Config {
 	}
 	cfg.Auth.PAT = ""
 	cfg.normalize()
+	if cfg.CurrentContext != "" {
+		if entry, ok := cfg.Contexts[cfg.CurrentContext]; ok {
+			cfg.Profile = entry.Profile
+			cfg.Endpoints = entry.Endpoints
+			cfg.Auth = entry.Auth
+		}
+	}
 	return cfg
 }
 
@@ -268,4 +291,67 @@ func (c *Config) backfillLegacy(d *diskConfig) {
 	if d.Auth == nil && d.LegacyInsecure {
 		c.Auth.Insecure = true
 	}
+}
+
+func (c *Config) snapshotContext() {
+	if c.CurrentContext == "" {
+		c.CurrentContext = "default"
+	}
+	if c.Contexts == nil {
+		c.Contexts = map[string]NamedContext{}
+	}
+	c.Contexts[c.CurrentContext] = NamedContext{c.Profile, c.Endpoints, c.Auth}
+}
+func (c *Config) SaveContext(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, "\r\n\t/") {
+		return errors.New("invalid context name")
+	}
+	c.snapshotContext()
+	if _, ok := c.Contexts[name]; ok && name != c.CurrentContext {
+		return errors.New("context already exists; use it rather than overwrite its credentials")
+	}
+	c.CurrentContext = name
+	c.snapshotContext()
+	return nil
+}
+func (c *Config) UseContext(name string) error {
+	c.snapshotContext()
+	entry, ok := c.Contexts[name]
+	if !ok {
+		return errors.New("unknown context")
+	}
+	c.CurrentContext = name
+	c.Profile = entry.Profile
+	c.Endpoints = entry.Endpoints
+	c.Auth = entry.Auth
+	return nil
+}
+
+func (c *Config) CurrentContextOrDefault() string {
+	if c.CurrentContext == "" {
+		return "default"
+	}
+	return c.CurrentContext
+}
+
+func (c *Config) InitContext(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, "\r\n\t/") {
+		return errors.New("invalid context name")
+	}
+	if c.CurrentContext == name {
+		return nil
+	}
+	if _, ok := c.Contexts[name]; ok {
+		return c.UseContext(name)
+	}
+	if c.Mode() != "" {
+		c.snapshotContext()
+	}
+	c.CurrentContext = name
+	c.Profile = Profile{}
+	c.Endpoints = Endpoints{}
+	c.Auth = Auth{}
+	return nil
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"hvx-cli/internal/api"
@@ -14,6 +15,30 @@ func (a *App) contextCommand(args []string) error {
 		return a.showContext()
 	}
 	switch args[0] {
+	case "current-context":
+		if len(args) != 1 {
+			return ErrUsage
+		}
+		fmt.Fprintln(a.stdout, a.cfg.CurrentContextOrDefault())
+		return nil
+	case "get-contexts", "list":
+		return a.listContexts(args[1:])
+	case "use-context", "use":
+		if len(args) != 2 {
+			return ErrUsage
+		}
+		if err := a.cfg.UseContext(args[1]); err != nil {
+			return err
+		}
+		return config.Save(a.cfg)
+	case "save":
+		if len(args) != 2 {
+			return ErrUsage
+		}
+		if err := a.cfg.SaveContext(args[1]); err != nil {
+			return err
+		}
+		return config.Save(a.cfg)
 	case "set-mode":
 		return a.contextSetMode(args[1:])
 	case "set-tenant":
@@ -51,9 +76,10 @@ func (a *App) showContext() error {
 
 	if a.outputFormat == "json" {
 		payload := map[string]string{
-			"mode":   mode,
-			"server": server,
-			"tenant": tenant,
+			"context": cfg.CurrentContextOrDefault(),
+			"mode":    mode,
+			"server":  server,
+			"tenant":  tenant,
 		}
 		if tenantServer := cfg.TenantServer(); tenantServer != "" {
 			payload["tenant_server"] = tenantServer
@@ -69,6 +95,7 @@ func (a *App) showContext() error {
 		return enc.Encode(payload)
 	}
 
+	fmt.Fprintf(a.stdout, "Context: %s\n", cfg.CurrentContextOrDefault())
 	fmt.Fprintf(a.stdout, "Mode: %s\n", mode)
 	fmt.Fprintf(a.stdout, "Server: %s\n", server)
 	fmt.Fprintf(a.stdout, "Tenant: %s\n", tenant)
@@ -157,5 +184,33 @@ func (a *App) printModeResult(mode string, updated bool) error {
 		return nil
 	}
 	fmt.Fprintf(a.stdout, "Mode already set to %s\n", mode)
+	return nil
+}
+
+func (a *App) listContexts(args []string) error {
+	if len(args) != 0 {
+		return ErrUsage
+	}
+	type summary struct {
+		Name    string `json:"name"`
+		Current bool   `json:"current"`
+		Mode    string `json:"mode"`
+		Tenant  string `json:"tenant,omitempty"`
+	}
+	rows := []summary{}
+	for name, entry := range a.cfg.Contexts {
+		rows = append(rows, summary{name, name == a.cfg.CurrentContext, entry.Profile.Mode, entry.Profile.CurrentTenant})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	if a.outputFormat == "json" {
+		return json.NewEncoder(a.stdout).Encode(rows)
+	}
+	for _, row := range rows {
+		mark := " "
+		if row.Current {
+			mark = "*"
+		}
+		fmt.Fprintf(a.stdout, "%s %s\t%s\t%s\n", mark, row.Name, row.Mode, row.Tenant)
+	}
 	return nil
 }

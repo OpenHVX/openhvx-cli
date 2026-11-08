@@ -64,3 +64,19 @@ Saves write a temporary private file, sync it, and rename it over the selected f
 Temporary files are removed after errors. Secure the parent directory and backups;
 Windows users should set appropriate account ACLs. Do not run simultaneous config
 updates from multiple processes.
+
+## Named contexts and receipts
+
+Use `init --context NAME` to initialize a separate environment/account. New contexts
+start empty; existing contexts retain only their own credentials. `config use-context`
+switches mode, tenant, endpoints, and authentication together. `context save NAME`
+names the current setup without overwriting another named context.
+
+Saved configuration includes `currentContext` and a `contexts` map. Earlier root-only
+configuration remains readable and becomes a default context on save. When manually
+editing a named configuration, edit its entry in `contexts`, not just the active
+root snapshot. Prefer context/init commands to keep these synchronized.
+
+Request receipts are stored beside this configuration in `requests/`. Their bodies
+may include sensitive cloud-init data; protect files and backups with the same care
+as credentials. See [replay rules](task-protocol.md#local-persistence).

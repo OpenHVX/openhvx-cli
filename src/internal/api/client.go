@@ -261,6 +261,7 @@ type Client struct {
 	HTTP           *http.Client
 	IdempotencyKey string
 	Context        context.Context
+	TaskSender     func(path string, body []byte) ([]byte, error)
 }
 
 // NewClient instantiates a Client with optional insecure TLS configuration.
@@ -359,11 +360,32 @@ func (c *Client) postJSON(path string, payload any) ([]byte, error) {
 		return nil, err
 	}
 
+	if strings.HasSuffix(path, "/tasks") && c.TaskSender != nil {
+		if _, err := c.requestURL(path); err != nil {
+			return nil, err
+		}
+		return c.TaskSender(path, buf.Bytes())
+	}
+	return c.postBody(path, buf.Bytes())
+}
+
+// SendRecordedTask sends the exact saved HTTP body with its original key.
+func (c *Client) SendRecordedTask(path string, body []byte, key string) ([]byte, error) {
+	if path != "/api/v1/tenant/tasks" && path != "/api/v1/admin/tasks" {
+		return nil, fmt.Errorf("invalid task route")
+	}
+	c.IdempotencyKey = key
+	return c.postBody(path, body)
+}
+
+func (c *Client) postBody(path string, savedBody []byte) ([]byte, error) {
+	buf := bytes.NewBuffer(savedBody)
+
 	requestURL, err := c.requestURL(path)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(c.requestContext(), http.MethodPost, requestURL, &buf)
+	req, err := http.NewRequestWithContext(c.requestContext(), http.MethodPost, requestURL, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -373,10 +395,17 @@ func (c *Client) postJSON(path string, payload any) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	var complete func() error
 	if strings.HasSuffix(path, "/tasks") {
 		key := strings.TrimSpace(c.IdempotencyKey)
+		if key == "" {
+			key, complete, err = pendingTaskKey(requestURL, c.PAT, buf.Bytes())
+			if err != nil {
+				return nil, fmt.Errorf("persist task identity before submission: %w", err)
+			}
+		}
 		if len(key) < 1 || len(key) > 200 || strings.ContainsAny(key, "\r\n") {
-			return nil, fmt.Errorf("--idempotency-key required for task submission (1..200 characters)")
+			return nil, fmt.Errorf("invalid idempotency key (1..200 characters)")
 		}
 		req.Header.Set("Idempotency-Key", key)
 	}
@@ -392,7 +421,16 @@ func (c *Client) postJSON(path string, payload any) ([]byte, error) {
 		return nil, fmt.Errorf("API error: %s: %s", resp.Status, string(b))
 	}
 
-	return readResponse(resp.Body)
+	body, err := readResponse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if complete != nil {
+		if err := complete(); err != nil {
+			return nil, fmt.Errorf("task accepted but local identity cleanup failed; rerun the identical command to recover the accepted task: %w", err)
+		}
+	}
+	return body, nil
 }
 
 // Login exchanges credentials for a PAT/token at the given API path.
@@ -846,7 +884,7 @@ func (c *Client) DeleteVMTask(tenantID, agentID, refID string, data VMDeleteData
 	if refID == "" {
 		return nil, fmt.Errorf("refID is required")
 	}
-	if !validGUID(refID) || !strings.EqualFold(refID, data.GUID) {
+	if !ValidGUID(refID) || !strings.EqualFold(refID, data.GUID) {
 		return nil, fmt.Errorf("--ref-id and --guid must identify the same canonical Hyper-V GUID")
 	}
 	refID = strings.ToLower(refID)
@@ -1055,7 +1093,7 @@ func tenantPath(base, tenantID string) string {
 	return base
 }
 
-func validGUID(value string) bool {
+func ValidGUID(value string) bool {
 	return regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(value)
 }
 

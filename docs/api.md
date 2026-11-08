@@ -1,47 +1,86 @@
 # API
 
-Run `hvx --help` for the full command overview. Global `-o json` preserves raw API
-responses for most reads and task submissions; context/init commands return their
-own credential-free JSON summaries. Text mode provides tables and task details.
+`hvx` follows resource-oriented command conventions. Flags can appear before or
+after positional arguments. `-o json` selects machine-readable responses; receipt
+and waiting diagnostics go to stderr.
 
-## Route mapping
+## Resources
+
+```bash
+hvx get vms
+hvx get disks
+hvx get resources
+hvx describe vm web01
+hvx describe disk data01
+hvx create vm web01 --ram 4GB --cpu 2 --disk-id DISK_REF
+hvx create disk data01 --image-id IMAGE_ID --size-mb 4096
+hvx start vm web01 --wait
+hvx stop vm web01
+hvx restart vm web01
+hvx delete vm web01 --agent-id host-1
+hvx delete disk data01
+```
+
+Names and references resolve against current tenant inventory. Multiple matches
+fail before submission; use the canonical reference and `--agent-id` to disambiguate.
+Resolved VM mutations require canonical GUIDs. The saved request retains that
+identity across retry, even if the resource name later changes.
+
+Task mutations support tenant and admin modes. Admin mode requires `--tenant` or
+the configured tenant; tenant mode derives identity from authentication. Convenience
+creation supports host selection, HA, generation, and cloud-init options. Legacy
+flag-only deletion (`--ref-id`, `--guid`) remains available.
+
+## Files and asynchronous operations
+
+```bash
+hvx create -f task.json
+hvx create task --file task.json
+hvx retry REQUEST_ID
+hvx get requests
+hvx get tasks
+hvx get task TASK_ID
+hvx wait task TASK_ID --timeout 5m --interval 2s
+```
+
+Files contain the HTTP `action`, `target`, and `data`, not Kubernetes manifests or
+AMQP envelopes. `--file -` reads stdin. In admin mode, `tenantId` comes from the file,
+`--tenant`, or current context; conflicting file/flag values are rejected.
+
+`get requests` lists local receipts without dumping payloads or credentials.
+`get tasks` queries locally known accepted task IDs. There is currently no global
+task-list or execution-log endpoint exposed by the backend, so no `logs` or `apply`
+command is provided. See [task semantics](task-protocol.md).
+
+## Contexts
+
+```bash
+hvx init --context lab --mode tenant --tenant-server URL --username EMAIL --password-stdin
+hvx init --context prod --mode admin --admin-server URL --username EMAIL --password-stdin
+hvx config get-contexts
+hvx config use-context lab
+hvx config current-context
+hvx context show
+hvx context save NAME
+```
+
+`context set-mode` and `context set-tenant` operate within the selected context.
+A new named context starts without inherited credentials. Context lists and details
+never print tokens.
+
+## Other routes
 
 | Command | HTTP API |
 | --- | --- |
-| `init --mode tenant` | POST `/api/v1/tenant/auth/login`, then `/auth/pats` under the same tenant prefix |
-| `init --mode admin` | POST `/api/v1/admin/auth/login`, then `/auth/pats` under the same admin prefix |
-| `get resources`, `get disks`, `get vms` | Tenant resources or admin tenant resources; disks filter storage resources |
-| `get images`, `describe image` | Images under the selected API prefix; `--resolve` calls the resolve endpoint |
+| `init` | Selected `/api/v1/{tenant|admin}/auth/login`, then `/auth/pats` |
+| `get resources`, `get disks`, `get vms` | Tenant resources or admin tenant resources |
+| `get images`, `describe image` | Images under the selected API prefix; optional resolve endpoint |
 | `get quotas` | Tenant quotas or admin `/tenants/{tenantId}/quotas` |
 | `get tenants`, `create tenant`, `delete tenant` | Admin `/tenants` routes |
-| `create user` | Admin POST `/auth/tenant/register` |
-| `create quota-recalc` | Admin POST `/tenants/{tenantId}/quotas/recalculate` |
-| `create disk`, `delete disk`, `create vm`, `delete vm` | Admin POST `/api/v1/admin/tasks` |
-| `create task --file FILE` | POST `/api/v1/{tenant|admin}/tasks` |
-| `get task`, `describe task`, `wait task` | GET `/api/v1/{tenant|admin}/tasks/{taskId}` |
+| `create user` | Admin `/auth/tenant/register` |
+| `create quota-recalc` | Admin `/tenants/{tenantId}/quotas/recalculate` |
+| Task mutations | POST `/api/v1/{tenant|admin}/tasks` |
+| Task inspection and waiting | GET `/api/v1/{tenant|admin}/tasks/{taskId}` |
 
-## Generic task submission
-
-`create task --file FILE` accepts a JSON object with `action`, `target`, and `data`.
-Use `--file -` to read stdin. Files are limited to 1 MiB. The backend validates the
-full action-specific schema and authorization.
-
-In admin mode, `tenantId` can come from the file, `--tenant`, or the configured
-current tenant. Conflicting file/flag tenants are rejected. In tenant mode, omit
-`tenantId`; authentication establishes tenant identity.
-
-## Convenience mutations
-
-- `create disk` requires `--name`, `--image-id`, and a positive `--size-mb`.
-- `delete disk` requires `--ref-id`; `--agent-id` can identify the storage connector.
-- `create vm` requires `--name`, `--ram`, positive `--cpu`, and `--disk-id`.
-  It also supports generation, HA, host selection, and cloud-init options.
-- `delete vm` accepts `--ref-id` or `--guid` as the canonical Hyper-V GUID.
-  If both are provided, they must identify the same VM. `--force` requests force stop.
-- Task mutations require `--idempotency-key`. Other admin changes are not covered by
-  the task idempotency contract; inspect server state before retrying an uncertain
-  tenant creation, user creation, or deletion.
-
-Most command flags must precede positional arguments because parsing uses Go's
-standard flag package. For example, use `describe image --resolve IMAGE_ID`.
-`wait task TASK_ID` explicitly supports options following that task ID.
+Tenant/user administration is outside the task idempotency contract. Inspect
+server state before retrying an uncertain non-task mutation.

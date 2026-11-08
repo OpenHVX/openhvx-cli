@@ -28,13 +28,17 @@ go build -o ../bin/hvx ./cmd/hvx
 Run `bin/hvx --help`, then follow the [configuration guide](docs/configuration.md).
 Use a patched Go toolchain when building distributable binaries.
 
-Example task submission after initialization:
+Common commands after initialization:
 
 ```bash
-bin/hvx --idempotency-key start-vm-001 create task --file examples/task.example.json
-bin/hvx get task --id TASK_ID
-bin/hvx wait task TASK_ID --timeout 5m
+bin/hvx get vms
+bin/hvx start vm web01 --wait
+bin/hvx create -f examples/task.example.json
+bin/hvx get requests
+bin/hvx retry REQUEST_ID
+bin/hvx get tasks
 ```
 
-Replace sample identifiers with resources owned by your authenticated tenant.
-Keep the same key and task content when retrying an uncertain submission.
+Keys are generated and saved automatically before submission. Use `retry` to recover
+an uncertain request; running a new task command creates a new operation.
+Named contexts select environments and accounts through `hvx config use-context`.
